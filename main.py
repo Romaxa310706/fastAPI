@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 import models, schemas
 from database import SessionLocal, engine
 
-# Инициализация базы данных
+#старт тут
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     models.Base.metadata.create_all(bind=engine)
@@ -14,8 +14,6 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-
-# Dependency
 def get_db():
     db = SessionLocal()
     try:
@@ -24,6 +22,7 @@ def get_db():
         db.close()
 
 
+#основные методы
 @app.post("/tasks/", response_model=schemas.TaskOut)
 def create_task(task: schemas.TaskCreate, db: Session = Depends(get_db)):
     db_task = models.TaskDB(**task.model_dump())
@@ -35,20 +34,12 @@ def create_task(task: schemas.TaskCreate, db: Session = Depends(get_db)):
 
 @app.get("/tasks/", response_model=List[schemas.TaskOut])
 def get_tasks(
-    sort_by: Optional[str] = Query(None, pattern="^(title|status|created_at)$"),
-    search: Optional[str] = None,
-    db: Session = Depends(get_db)
-):
+    sort_by: Optional[str] = Query(None, pattern="^(title|status|created_at)$"), search: Optional[str] = None, db: Session = Depends(get_db)):
     query = db.query(models.TaskDB)
-
     if search:
-        query = query.filter(
-            (models.TaskDB.title.contains(search)) | (models.TaskDB.description.contains(search))
-        )
-
+        query = query.filter((models.TaskDB.title.contains(search)) | (models.TaskDB.description.contains(search)))
     if sort_by:
         query = query.order_by(getattr(models.TaskDB, sort_by))
-
     return query.all()
 
 
