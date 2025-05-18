@@ -1,78 +1,104 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
+
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from main import app, get_db
+from database import Base, engine, SessionLocal
+from sqlalchemy.orm import Session
+from sqlalchemy import inspect
 
-from src.main import app, get_db
-from src.database import Base
-from src.models import TaskDB
-
-SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-Base.metadata.create_all(bind=engine)
-
-def override_get_db():
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
 
+@pytest.fixture(scope="module")
+def db():
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    yield db
+    db.close()
+    Base.metadata.drop_all(bind=engine)
 
-def test_create_task():
+def test_lifespan_creates_tables():
+    Base.metadata.create_all(bind=engine)
+    inspector = inspect(engine)
+    tables = inspector.get_table_names()
+    assert "tasks" in tables
+
+def test_get_db_yields_session():
+    gen = get_db()
+    db_session = next(gen)
+    assert isinstance(db_session, Session)
+    try:
+        next(gen)
+    except StopIteration:
+        pass
+
+def test_create_task(db):
     response = client.post("/tasks/", json={
-        "title": "Test Task",
-        "description": "This is a test task",
+        "title": "Test task",
+        "description": "Test description",
         "status": "pending",
         "priority": 1
     })
     assert response.status_code == 200
-    assert response.json()["title"] == "Test Task"
+    data = response.json()
+    assert data["title"] == "Test task"
+    assert "id" in data
 
-
-def test_get_tasks():
-    response = client.get("/tasks/")
+def test_get_tasks_sort_and_search(db):
+    client.post("/tasks/", json={"title": "abc", "description": "desc", "status": "pending"})
+    client.post("/tasks/", json={"title": "def", "description": "desc2", "status": "done"})
+    response = client.get("/tasks/", params={"search": "abc"})
     assert response.status_code == 200
-    assert isinstance(response.json(), list)
+    tasks = response.json()
+    assert all("abc" in task["title"] for task in tasks)
 
+    response = client.get("/tasks/", params={"sort_by": "status"})
+    assert response.status_code == 200
+    tasks = response.json()
+    statuses = [task["status"] for task in tasks]
+    assert statuses == sorted(statuses)
 
 def test_get_task_not_found():
     response = client.get("/tasks/9999")
     assert response.status_code == 404
 
-
-def test_update_task():
-    create = client.post("/tasks/", json={
-        "title": "To Update",
-        "description": "Old desc",
-        "status": "pending",
-        "priority": 0
+def test_update_task(db):
+    response = client.post("/tasks/", json={
+        "title": "Update test",
+        "description": "desc",
+        "status": "pending"
     })
-    task_id = create.json()["id"]
-
+    task_id = response.json()["id"]
     response = client.put(f"/tasks/{task_id}", json={
-        "title": "Updated",
-        "description": "New desc",
-        "status": "done",
-        "priority": 5
+        "title": "Updated title",
+        "description": "desc",
+        "status": "done"
     })
     assert response.status_code == 200
-    assert response.json()["title"] == "Updated"
+    data = response.json()
+    assert data["title"] == "Updated title"
+    assert data["status"] == "done"
 
-
-def test_delete_task():
-    create = client.post("/tasks/", json={
-        "title": "To Delete",
+def test_delete_task(db):
+    response = client.post("/tasks/", json={
+        "title": "Delete test",
         "description": "desc",
-        "status": "pending",
-        "priority": 0
+        "status": "pending"
     })
-    task_id = create.json()["id"]
+    task_id = response.json()["id"]
     response = client.delete(f"/tasks/{task_id}")
     assert response.status_code == 200
-    assert response.json()["message"] == "Task deleted"
+    assert response.json() == {"message": "Task deleted"}
+    response = client.get(f"/tasks/{task_id}")
+    assert response.status_code == 404
+
+def test_get_top_priority_tasks(db):
+    client.post("/tasks/", json={"title": "Low", "description": "desc", "status": "pending", "priority": 1})
+    client.post("/tasks/", json={"title": "High", "description": "desc", "status": "pending", "priority": 10})
+    response = client.get("/tasks/top/1")
+    assert response.status_code == 200
+    tasks = response.json()
+    assert len(tasks) == 1
+    assert tasks[0]["priority"] == 10
