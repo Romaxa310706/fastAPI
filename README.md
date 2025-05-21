@@ -9,6 +9,6 @@ pip install -r requirements.txt
 
 ## Покрытие тестами
 
-Coverage report: 94%
+Coverage report: 96%
 
 Подробный отчет находится в файле `htmlcov/index.html`.
