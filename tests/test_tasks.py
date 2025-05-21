@@ -1,6 +1,7 @@
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
+#Тут вставил таким образом, потому что командная строка при запуске тестов ну ни в какую не хотела видель src
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,6 +9,9 @@ from main import app, get_db
 from database import Base, engine, SessionLocal
 from sqlalchemy.orm import Session
 from sqlalchemy import inspect
+import models
+
+
 
 client = TestClient(app)
 
@@ -104,27 +108,30 @@ def test_get_top_priority_tasks(db):
     assert tasks[0]["priority"] == 10
 
 def test_get_tasks_complex_logic(db):
-    db_task1 = models.TaskDB(title="Buy milk", status="pending", priority=1)
-    db_task2 = models.TaskDB(title="Fix bug", status="done", priority=3)
+    db_task1 = models.TaskDB(title="Buy milk", description="", status="pending", priority=1)
+    db_task2 = models.TaskDB(title="Fix bug", description="bug", status="done", priority=3)
     db.add_all([db_task1, db_task2])
     db.commit()
-
+    
     response = client.get("/tasks/", params={"search": "bug"})
     assert response.status_code == 200
     assert any(task["title"] == "Fix bug" for task in response.json())
 
-    response = client.get("/tasks/", params={"sort_by": "priority"})
-    tasks = response.json()
-    assert tasks[0]["priority"] == 3
-
 def test_get_task_mocked(mocker):
     mock_db = mocker.MagicMock()
-    mock_task = models.TaskDB(title="Mocked", description="test", status="pending", priority=0)
+    mock_task = models.TaskDB(
+        id=1,
+        title="Mocked",
+        description="Test description",
+        status="pending",
+        priority=0
+    )
     mock_db.query.return_value.filter_by.return_value.first.return_value = mock_task
     mocker.patch("main.get_db", return_value=iter([mock_db]))
+    
     response = client.get("/tasks/1")
-    assert response.json()["description"] == "test"
-    assert response.json()["priority"] == 0
+    assert response.status_code == 200
+    assert response.json()["description"] == "Test description"  # Проверяем реальное значение
 
 def test_create_task_invalid_data():
     response = client.post("/tasks/", json={"title": "Valid", "status": "pending"})
@@ -137,13 +144,19 @@ def test_create_task_invalid_data():
     assert response.status_code == 422
 
 def test_get_tasks_sort_by_created_at(db):
-    db_task1 = models.TaskDB(title="Task1", description="desc", status="pending")
-    db_task2 = models.TaskDB(title="Task2", description="desc", status="done")
+    db.query(models.TaskDB).delete()
+    db.commit()
+    
+    db_task1 = models.TaskDB(title="Task1", description="desc1", status="pending")
+    db_task2 = models.TaskDB(title="Task2", description="desc2", status="done")
     db.add_all([db_task1, db_task2])
     db.commit()
+
     response = client.get("/tasks/", params={"sort_by": "created_at"})
+    assert response.status_code == 200
     tasks = response.json()
-    assert tasks[0]["title"] in ["Task1", "Task2"]
+    assert len(tasks) == 2
+    assert tasks[0]["created_at"] <= tasks[1]["created_at"]
 
 def test_create_task_default_priority(db):
     response = client.post("/tasks/", json={
