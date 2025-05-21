@@ -102,3 +102,36 @@ def test_get_top_priority_tasks(db):
     tasks = response.json()
     assert len(tasks) == 1
     assert tasks[0]["priority"] == 10
+
+def test_get_tasks_complex_logic(db):
+    # Создаём тестовые задачи
+    db_task1 = models.TaskDB(title="Buy milk", status="pending", priority=1)
+    db_task2 = models.TaskDB(title="Fix bug", status="done", priority=3)
+    db.add_all([db_task1, db_task2])
+    db.commit()
+
+    response = client.get("/tasks/", params={"search": "bug"})
+    assert response.status_code == 200
+    assert any(task["title"] == "Fix bug" for task in response.json())
+
+    response = client.get("/tasks/", params={"sort_by": "priority"})
+    tasks = response.json()
+    assert tasks[0]["priority"] == 3
+
+def test_get_task_mocked(mocker):
+    mock_db = mocker.MagicMock()
+    mock_task = models.TaskDB(title="Mocked task", status="pending")
+    mock_db.query.return_value.filter_by.return_value.first.return_value = mock_task
+
+    mocker.patch("main.get_db", return_value=iter([mock_db]))
+
+    response = client.get("/tasks/1")
+    assert response.status_code == 200
+    assert response.json()["title"] == "Mocked task"
+
+def test_create_task_invalid_data():
+    response = client.post("/tasks/", json={"title": "", "status": "pending"})
+    assert response.status_code == 422
+
+    response = client.post("/tasks/", json={"title": "Valid", "status": "invalid_status"})
+    assert response.status_code == 422
